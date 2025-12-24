@@ -2,16 +2,20 @@ name: Miniko Hawk Radar
 
 on:
   schedule:
-    # 每 15 分鐘執行一次 (無限流量模式)
+    # 每 15 分鐘執行一次
     - cron: '*/15 * * * *'
-  
-  # 允許手動按按鈕測試
   workflow_dispatch:
+
+# --- 新增這一段，給機器人寫入筆記本的權限 ---
+permissions:
+  contents: read
+  issues: write 
+# ----------------------------------------
 
 jobs:
   run-hawk:
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # 掃描通常很快，設 15 分鐘保險
+    timeout-minutes: 10
 
     steps:
     - name: Checkout code
@@ -31,5 +35,9 @@ jobs:
       env:
         TG_TOKEN: ${{ secrets.TG_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        # GitHub 自動提供的 token，不用另外設定 Secret
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 告訴程式目前的專案名稱 (格式: 帳號/專案名)
+        REPO_NAME: ${{ github.repository }}
       run: |
         python hawk_monitor.py
