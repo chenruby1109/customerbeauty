@@ -1,150 +1,154 @@
 import os
 import time
 import requests
-from duckduckgo_search import DDGS
-from github import Github # 引入 GitHub 工具
+import random
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from github import Github
 from datetime import datetime
 
-# --- 1. 設定監控關鍵字 ---
-LOCATIONS = ["中壢", "桃園", "平鎮", "八德"]
-SERVICES = ["接睫毛", "做臉", "除毛", "清粉刺", "皮膚管理"]
-
-KEYWORDS = []
-for loc in LOCATIONS:
-    for serv in SERVICES:
-        KEYWORDS.append(f"{loc}{serv} site:threads.net")
-
-KEYWORDS.extend([
-    "中壢推薦做臉 site:threads.net",
-    "桃園清粉刺推薦 site:threads.net",
-    "想做皮膚管理 site:threads.net"
-])
-
-# --- 2. 設定排除關鍵字 ---
-BLOCK_WORDS = [
-    "推廣", "廣告", "教學", "課程", "徵才", "徵手模", 
-    "工作室出租", "美睫教學", "紋繡教學"
+# --- 1. 設定極速監控關鍵字 ---
+# 為了避免被 Google 封鎖，我們精簡關鍵字，只查最核心的
+# 格式：(關鍵字, 顯示名稱)
+TARGETS = [
+    ("中壢美甲 site:threads.net", "中壢美甲"),
+    ("中壢接睫毛 site:threads.net", "中壢睫毛"),
+    ("中壢做臉 site:threads.net", "中壢做臉"),
+    ("中壢除毛 site:threads.net", "中壢除毛"),
+    ("桃園皮膚管理 site:threads.net", "桃園皮膚")
 ]
 
-# --- 3. 取得環境變數 ---
+# --- 2. 排除字眼 ---
+BLOCK_WORDS = ["廣告", "推廣", "教學", "課程", "徵手模", "分享"]
+
+# --- 3. 環境變數 ---
 TG_TOKEN = os.environ.get("TG_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-REPO_NAME = os.environ.get("REPO_NAME") # 例如: yourname/miniko-hawk
+REPO_NAME = os.environ.get("REPO_NAME")
 
-# --- 4. 功能函式 ---
+# --- 4. 初始化 Selenium (偽裝瀏覽器) ---
+def setup_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless") # 無頭模式 (不顯示視窗)
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    # 使用一般使用者的 User-Agent，避免被認成機器人
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36")
+    chrome_options.add_argument("--lang=zh-TW") # 設定中文環境
+    
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
+
+# --- 5. 功能函式 ---
+def send_telegram(msg):
+    if not TG_TOKEN or not TG_CHAT_ID: return
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True})
 
 def check_if_seen(repo, link_id):
-    """檢查這個連結是否已經紀錄在 Issue 中"""
-    if not repo:
-        return False
-    # 搜尋標題包含該連結的 Issue (state='all' 代表包含已關閉的)
+    if not repo: return False
     issues = repo.get_issues(state='all', labels=['lead'])
     for issue in issues:
-        if link_id in issue.title:
-            return True
+        if link_id in issue.title: return True
     return False
 
 def mark_as_seen(repo, link_id, content):
-    """建立一個 Issue 來記錄這個潛在客戶"""
-    if not repo:
-        return
+    if not repo: return
     try:
-        # 建立一個標記為 'lead' 的 Issue
-        issue = repo.create_issue(
-            title=f"[已通知] {link_id}",
-            body=f"內容摘要：\n{content}\n\n連結：{link_id}",
-            labels=['lead']
-        )
-        # 建立後馬上關閉它，保持列表整潔
+        issue = repo.create_issue(title=f"[已通知] {link_id}", body=f"{content}\n\n{link_id}", labels=['lead'])
         issue.edit(state='closed')
-        print(f"📝 已寫入紀錄: {link_id}")
-    except Exception as e:
-        print(f"寫入紀錄失敗: {e}")
+    except: pass
 
-def send_telegram(msg):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TG_CHAT_ID,
-        "text": msg,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(f"TG 發送失敗: {e}")
+def google_search_past_hour(driver, query):
+    # &tbs=qdr:h 代表 "Query Date Range: Hour" (過去一小時)
+    # &hl=zh-TW 強制中文介面
+    url = f"https://www.google.com/search?q={query}&tbs=qdr:h&hl=zh-TW"
+    print(f"   >>> 前往 Google (過去1小時): {url}")
+    
+    driver.get(url)
+    time.sleep(random.uniform(2, 5)) # 隨機等待，像真人一樣
+
+    results = []
+    # Google 的搜尋結果通常在 class="g" 的 div 裡
+    elements = driver.find_elements(By.CSS_SELECTOR, 'div.g')
+    
+    if not elements:
+        # 如果找不到 class="g"，可能是因為 Google 改版或出現驗證碼
+        print("   ⚠️ 找不到結果或遇到驗證碼")
+        # 截圖除錯 (可選)
+        # driver.save_screenshot("debug.png")
+        return []
+
+    for el in elements:
+        try:
+            # 抓標題 (h3)
+            title_el = el.find_element(By.TAG_NAME, 'h3')
+            title = title_el.text
+            
+            # 抓連結 (a tag)
+            link_el = el.find_element(By.TAG_NAME, 'a')
+            link = link_el.get_attribute('href')
+            
+            # 抓摘要 (通常在 div 裡)
+            content = el.text.replace(title, "")
+            
+            if "threads.net" in link:
+                results.append({"title": title, "link": link, "content": content})
+        except:
+            continue
+            
+    return results
 
 # --- 主程式 ---
 def run_hawk_radar():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 霍克雷達 (智能去重版) 啟動...")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 霍克雷達 (Google 1小時極速版) 啟動...")
     
-    # 初始化 GitHub 連線 (用於讀寫紀錄)
+    # 準備 GitHub 資料庫
     repo = None
     if GITHUB_TOKEN and REPO_NAME:
         try:
             g = Github(GITHUB_TOKEN)
             repo = g.get_repo(REPO_NAME)
-            print("✅ 成功連線到 GitHub 資料庫")
-        except Exception as e:
-            print(f"⚠️ 無法連線 GitHub: {e}")
+        except: pass
 
-    found_count = 0
-    new_count = 0
+    driver = setup_driver()
     
-    with DDGS() as ddgs:
-        for query in KEYWORDS:
-            print(f"🔍 正在掃描: {query} ...")
-            try:
-                # 為了避免遺漏，我們稍微抓多一點 (10筆)，然後靠程式過濾重複
-                results = ddgs.text(query, region="tw-tzh", timelimit="d", max_results=10)
+    try:
+        for query, label in TARGETS:
+            print(f"🔍 正在搜尋: {label} ...")
+            leads = google_search_past_hour(driver, query)
+            
+            print(f"   -> 找到 {len(leads)} 筆資料 (含重複)")
+            
+            for lead in leads:
+                # 排除過濾
+                if any(bad in lead['content'] for bad in BLOCK_WORDS): continue
+                if repo and check_if_seen(repo, lead['link']): continue
                 
-                if results:
-                    for r in results:
-                        link = r.get('href', '')
-                        title = r.get('title', '')
-                        body = r.get('body', '')
-                        
-                        # 1. 基本排除
-                        full_text = f"{title} {body}"
-                        if any(bad in full_text for bad in BLOCK_WORDS):
-                            continue 
-
-                        # 2. 智能去重檢查 (關鍵步驟!)
-                        # 用連結當作唯一 ID
-                        if repo and check_if_seen(repo, link):
-                            print(f"⏭️ 跳過已通知過的: {link}")
-                            continue
-
-                        # --- 3. 發現新客戶 ---
-                        found_count += 1
-                        new_count += 1
-                        keyword_clean = query.replace(" site:threads.net", "")
-                        
-                        msg = (
-                            f"🎯 <b>Miniko 雷達響了！</b>\n"
-                            f"關鍵字：#{keyword_clean}\n"
-                            f"------------------\n"
-                            f"{body[:100]}...\n"
-                            f"------------------\n"
-                            f"🔗 <a href='{link}'>點擊去 Threads 留言</a>"
-                        )
-                        send_telegram(msg)
-                        
-                        # 4. 寫入筆記本
-                        mark_as_seen(repo, link, body)
-                        
-                        time.sleep(1)
-
-                time.sleep(2)
-                
-            except Exception as e:
-                print(f"搜尋錯誤 ({query}): {e}")
-                time.sleep(5)
-
-    print(f"✅ 掃描完成。掃描 {found_count} 筆，其中 {new_count} 筆是新的。")
+                # 發送通知
+                print(f"✅ 新發現: {lead['title']}")
+                msg = (
+                    f"🔥 <b>{label} 急客出現！</b> (1小時內)\n"
+                    f"{lead['title']}\n"
+                    f"------------------\n"
+                    f"🔗 <a href='{lead['link']}'>點擊搶單</a>"
+                )
+                send_telegram(msg)
+                mark_as_seen(repo, lead['link'], lead['content'])
+            
+            # 每次搜尋完休息久一點，避免 Google 生氣
+            time.sleep(random.uniform(5, 10))
+            
+    except Exception as e:
+        print(f"❌ 發生錯誤: {e}")
+    finally:
+        driver.quit()
+        print("程式執行結束")
 
 if __name__ == "__main__":
     run_hawk_radar()
