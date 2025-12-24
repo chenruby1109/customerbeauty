@@ -2,15 +2,13 @@ name: Miniko Hawk Radar
 
 on:
   schedule:
-    # 每 15 分鐘執行一次
-    - cron: '*/15 * * * *'
+    # 既然是抓「過去一小時」，我們每 45 分鐘跑一次剛好
+    - cron: '*/45 * * * *'
   workflow_dispatch:
 
-# --- 新增這一段，給機器人寫入筆記本的權限 ---
 permissions:
   contents: read
-  issues: write 
-# ----------------------------------------
+  issues: write
 
 jobs:
   run-hawk:
@@ -26,6 +24,10 @@ jobs:
       with:
         python-version: '3.9'
 
+    # --- 新增這兩段：安裝 Chrome 瀏覽器 ---
+    - name: Setup Chrome
+      uses: browser-actions/setup-chrome@latest
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -35,9 +37,7 @@ jobs:
       env:
         TG_TOKEN: ${{ secrets.TG_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        # GitHub 自動提供的 token，不用另外設定 Secret
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # 告訴程式目前的專案名稱 (格式: 帳號/專案名)
         REPO_NAME: ${{ github.repository }}
       run: |
         python hawk_monitor.py
