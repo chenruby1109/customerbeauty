@@ -1,3 +1,4 @@
+selenium
+webdriver-manager
 requests
-duckduckgo-search>=6.0.0
 PyGithub
