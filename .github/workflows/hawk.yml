@@ -1,0 +1,40 @@
+name: Miniko Hawk Radar
+
+on:
+  schedule:
+    # 時間是 UTC (台灣時間 -8)
+    # 台灣 09:00 (UTC 01:00) -> 早班車，看昨晚有沒有人問
+    # 台灣 14:00 (UTC 06:00) -> 午班車
+    # 台灣 20:00 (UTC 12:00) -> 晚班車，滑手機高峰
+    - cron: '0 1 * * *'
+    - cron: '0 6 * * *'
+    - cron: '0 12 * * *'
+  
+  # 允許手動按按鈕測試
+  workflow_dispatch:
+
+jobs:
+  run-hawk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # 掃描通常很快，設 15 分鐘保險
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run Hawk Monitor
+      env:
+        TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      run: |
+        python hawk_monitor.py
